@@ -18,6 +18,7 @@ package requester
 import (
 	"bytes"
 	"crypto/tls"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"net/http"
@@ -28,6 +29,7 @@ import (
 	"time"
 
 	"golang.org/x/net/http2"
+	"golang.org/x/net/proxy"
 )
 
 // Max size of the buffer of result channel.
@@ -226,16 +228,50 @@ func (b *Work) runWorkers() {
 	var wg sync.WaitGroup
 	wg.Add(b.C)
 
-	tr := &http.Transport{
-		TLSClientConfig: &tls.Config{
-			InsecureSkipVerify: true,
-			ServerName:         b.Request.Host,
-		},
-		MaxIdleConnsPerHost: min(b.C, maxIdleConn),
-		DisableCompression:  b.DisableCompression,
-		DisableKeepAlives:   b.DisableKeepAlives,
-		Proxy:               http.ProxyURL(b.ProxyAddr),
+	var tr *http.Transport;
+
+	// added for socks proxy supporting
+	// by Frank
+	if b.ProxyAddr.Scheme == "http" || b.ProxyAddr.Scheme == "https" {
+		tr = &http.Transport{
+			TLSClientConfig: &tls.Config{
+				InsecureSkipVerify: true,
+				ServerName:         b.Request.Host,
+			},
+			MaxIdleConnsPerHost: min(b.C, maxIdleConn),
+			DisableCompression:  b.DisableCompression,
+			DisableKeepAlives:   b.DisableKeepAlives,
+			Proxy:               http.ProxyURL(b.ProxyAddr),
+		}
+	} else if b.ProxyAddr.Scheme == "socks" || b.ProxyAddr.Scheme == "socks5" {
+		dialer, err := proxy.SOCKS5("tcp", b.ProxyAddr.Host, nil, proxy.Direct)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "can't connect to the proxy:", err)
+			os.Exit(1)
+		}
+
+		tr = &http.Transport{
+			TLSClientConfig: &tls.Config{
+				InsecureSkipVerify: true,
+				ServerName:         b.Request.Host,
+			},
+			MaxIdleConnsPerHost: min(b.C, maxIdleConn),
+			DisableCompression:  b.DisableCompression,
+			DisableKeepAlives:   b.DisableKeepAlives,
+		}
+		tr.Dial = dialer.Dial
+	} else {
+		tr = &http.Transport{
+			TLSClientConfig: &tls.Config{
+				InsecureSkipVerify: true,
+				ServerName:         b.Request.Host,
+			},
+			MaxIdleConnsPerHost: min(b.C, maxIdleConn),
+			DisableCompression:  b.DisableCompression,
+			DisableKeepAlives:   b.DisableKeepAlives,
+		}
 	}
+
 	if b.H2 {
 		http2.ConfigureTransport(tr)
 	} else {
